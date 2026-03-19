@@ -35,11 +35,17 @@ search_executor   = ThreadPoolExecutor(max_workers=5, thread_name_prefix="srch")
 # ─────────────────────────────────────────
 
 def get_ffmpeg_path():
-    base = sys._MEIPASS if getattr(sys, "frozen", False) else os.path.abspath(".")
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, "assets", "ffmpeg")
 
 
-print(get_ffmpeg_path())
+ffmpeg_path = get_ffmpeg_path()
+print("ffmpeg path resolves to:", ffmpeg_path)
+print("file exists:", os.path.exists(ffmpeg_path))
+
 
 # ─────────────────────────────────────────
 #  THEME CONSTANTS
@@ -292,7 +298,7 @@ def build_ydl_opts(progress_hook=None):
     opts = {
         "format"          : "bestaudio/best",
         "outtmpl"         : f"{download_path}/%(title)s.%(ext)s",
-        "ffmpeg-location" : get_ffmpeg_path(),
+        "ffmpeg_location" : get_ffmpeg_path(),
         "quiet"           : True,
         "ignoreerrors"    : True,
         "writethumbnail"  : True,
