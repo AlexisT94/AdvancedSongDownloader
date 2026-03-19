@@ -39,6 +39,8 @@ def get_ffmpeg_path():
     return os.path.join(base, "assets", "ffmpeg")
 
 
+print(get_ffmpeg_path())
+
 # ─────────────────────────────────────────
 #  THEME CONSTANTS
 # ─────────────────────────────────────────
