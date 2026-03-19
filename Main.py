@@ -7,6 +7,8 @@ import vlc
 import os
 import sys
 import time
+import subprocess
+import importlib
 
 # ─────────────────────────────────────────
 #  GLOBALS
@@ -57,6 +59,203 @@ INFO      = "#38bdf8"
 STOPPED   = "#a1a1aa"
 FONT      = "SF Pro Display"
 FONT_MONO = "SF Mono"
+
+
+# ─────────────────────────────────────────
+#  YT-DLP AUTO UPDATE
+# ─────────────────────────────────────────
+
+import re as _re
+
+try:
+    from packaging.version import Version as _V
+    def _norm_version(v):
+        try:
+            return _V(v)
+        except Exception:
+            return tuple(int(x) for x in v.split("."))
+except ImportError:
+    # packaging not available (e.g. stripped PyInstaller bundle)
+    def _norm_version(v):
+        """Normalize '2026.03.17' == '2026.3.17' by parsing each segment as int."""
+        try:
+            return tuple(int(x) for x in v.split("."))
+        except Exception:
+            return (0,)
+
+
+def get_ytdlp_version():
+    try:
+        return yt_dlp.version.__version__
+    except Exception:
+        return "unknown"
+
+
+def _find_python():
+    """Return the Python executable to use for pip calls."""
+    return sys.executable
+
+
+def check_ytdlp_update(callback):
+    """Background thread: calls callback('up_to_date'|'available'|'error', info)."""
+    def _worker():
+        python = _find_python()
+        try:
+            result = subprocess.run(
+                [python, "-m", "pip", "index", "versions", "yt-dlp"],
+                capture_output=True, text=True, timeout=15
+            )
+            match = _re.search(r"yt-dlp\s*\(([^)]+)\)", result.stdout)
+            if match:
+                latest  = match.group(1).strip().split(",")[0].strip()
+                current = get_ytdlp_version()
+                if _norm_version(latest) > _norm_version(current):
+                    root.after(0, lambda: callback("available", latest))
+                else:
+                    root.after(0, lambda: callback("up_to_date", current))
+            else:
+                root.after(0, lambda: callback("error", "Could not parse version"))
+        except Exception as e:
+            root.after(0, lambda: callback("error", str(e)))
+    Thread(target=_worker, daemon=True).start()
+
+
+def update_ytdlp(on_progress, on_done):
+    """Background thread: streams pip output, reloads module, calls on_done(bool, str)."""
+    def _worker():
+        python = _find_python()
+        try:
+            proc = subprocess.Popen(
+                [python, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    root.after(0, lambda l=line: on_progress(l))
+            proc.wait()
+            if proc.returncode == 0:
+                try:
+                    importlib.reload(yt_dlp)
+                    importlib.reload(yt_dlp.version)
+                except Exception:
+                    pass
+                new_ver = get_ytdlp_version()
+                root.after(0, lambda: on_done(True, new_ver))
+            else:
+                root.after(0, lambda: on_done(False, "pip exited with error"))
+        except Exception as e:
+            root.after(0, lambda: on_done(False, str(e)))
+    Thread(target=_worker, daemon=True).start()
+
+
+def open_update_dialog():
+    win = tk.Toplevel(root)
+    win.title("Update yt-dlp")
+    win.geometry("420x300")
+    win.configure(bg=BG)
+    win.resizable(False, False)
+    win.grab_set()
+
+    current    = get_ytdlp_version()
+    can_update = False   # flipped to True once check finds a newer version
+
+    tk.Label(win, text="yt-dlp updater",
+             font=(FONT, 14, "bold"), bg=BG, fg=FG).pack(pady=(18, 2))
+
+    status_var = tk.StringVar(value=f"Installed: {current}  —  Checking for updates…")
+    tk.Label(win, textvariable=status_var,
+             font=(FONT, 11), bg=BG, fg=FG2).pack()
+
+    # Button row packed FIRST so it anchors to bottom before log takes remaining space
+    btn_frame = tk.Frame(win, bg=BG)
+    btn_frame.pack(side="bottom", pady=14)
+
+    log_frame = tk.Frame(win, bg=BG2, highlightthickness=1, highlightbackground=BORDER)
+    log_frame.pack(fill="both", expand=True, padx=18, pady=(12, 0))
+
+    log_box = tk.Text(
+        log_frame, bg=BG2, fg=FG2, insertbackground=FG,
+        relief="flat", bd=0, font=(FONT_MONO, 10),
+        state="disabled", wrap="word", padx=8, pady=6
+    )
+    log_box.pack(fill="both", expand=True)
+
+    def log(text):
+        log_box.config(state="normal")
+        log_box.insert(tk.END, text + "\n")
+        log_box.see(tk.END)
+        log_box.config(state="disabled")
+
+    # ── Update button: a plain Label styled as a button.
+    # We toggle its appearance and click-behaviour after the version check.
+    update_lbl = tk.Label(
+        btn_frame, text="Update now",
+        bg=BG3, fg=FG3,          # greyed out until check passes
+        relief="flat", bd=0,
+        padx=14, pady=6,
+        font=(FONT, 12), cursor="arrow"
+    )
+    update_lbl.pack(side="left", padx=(0, 8))
+    styled_btn(btn_frame, "Close", win.destroy).pack(side="left")
+
+    def _enable_update_btn():
+        """Make the update button live once we know an update is available."""
+        update_lbl.config(bg=ACCENT, fg="#ffffff", cursor="hand2")
+
+        def on_enter(e):  update_lbl.config(bg=ACCENT2)
+        def on_leave(e):  update_lbl.config(bg=ACCENT)
+        def on_click(e):
+            if not can_update:
+                return
+            # Disable immediately so it can't be double-clicked
+            update_lbl.config(bg=BG3, fg=FG3, cursor="arrow")
+            update_lbl.unbind("<Enter>")
+            update_lbl.unbind("<Leave>")
+            update_lbl.unbind("<ButtonPress-1>")
+            _start_update()
+
+        update_lbl.bind("<Enter>",         on_enter)
+        update_lbl.bind("<Leave>",         on_leave)
+        update_lbl.bind("<ButtonPress-1>", on_click)
+
+    def _start_update():
+        status_var.set("Updating…")
+        log("Running: pip install --upgrade yt-dlp\n")
+
+        def on_done(success, msg):
+            if success:
+                status_var.set(f"Done — now running yt-dlp {msg}")
+                log(f"\nUpdated to {msg}.")
+                log("Reload applied in-process — no restart needed.")
+                ytdlp_ver_var.set(f"yt-dlp {msg}")
+                update_notif_var.set("")
+            else:
+                status_var.set("Update failed")
+                log(f"\nError: {msg}")
+
+        update_ytdlp(log, on_done)
+
+    def on_check(status, info):
+        nonlocal can_update
+        if status == "up_to_date":
+            status_var.set(f"Already up to date ({info})")
+            log(f"yt-dlp {info} is the latest version.")
+        elif status == "available":
+            can_update = True
+            status_var.set(f"Update available:  {current}  →  {info}")
+            log(f"Installed : {current}")
+            log(f"Latest    : {info}")
+            log("\nClick \'Update now\' to upgrade.")
+            _enable_update_btn()
+        else:
+            status_var.set(f"Check failed: {info}")
+            log(f"Error: {info}")
+
+    check_ytdlp_update(on_check)
+
+
+
 
 
 # ─────────────────────────────────────────
@@ -318,7 +517,7 @@ def _search_worker(query, gen):
     """
     try:
         with yt_dlp.YoutubeDL({"quiet": True, "ignoreerrors": True}) as ydl:
-            raw = ydl.extract_info(f'ytsearch10:{query} + "topic"', download=False)
+            raw = ydl.extract_info(f'ytsearch10:{query} "topic"', download=False)
 
         if gen != _search_generation:
             return
@@ -580,7 +779,7 @@ def separator(parent, axis="x", pad=0):
 
 root = tk.Tk()
 root.title("Audio Downloader Pro")
-root.geometry("860x620")
+root.geometry("860x720")
 root.minsize(720, 520)
 root.configure(bg=BG)
 
@@ -624,6 +823,26 @@ tk.Label(topbar, text="🎧", font=(FONT, 20), bg=BG, fg=FG).pack(
     side="left", padx=(16, 6), pady=8)
 tk.Label(topbar, text="Audio Downloader Pro",
          font=(FONT, 15, "bold"), bg=BG, fg=FG).pack(side="left", pady=8)
+
+ytdlp_ver_var = tk.StringVar(value=f"yt-dlp {get_ytdlp_version()}")
+tk.Label(topbar, textvariable=ytdlp_ver_var,
+         font=(FONT, 10), bg=BG, fg=FG3).pack(side="right", padx=(0, 6), pady=8)
+
+update_notif_var = tk.StringVar(value="")
+update_notif = tk.Label(topbar, textvariable=update_notif_var,
+                        font=(FONT, 10), bg=BG, fg=WARNING, cursor="hand2")
+update_notif.pack(side="right", padx=(0, 4), pady=8)
+update_notif.bind("<ButtonPress-1>", lambda e: open_update_dialog())
+
+styled_btn(topbar, "⟳ yt-dlp", open_update_dialog, small=True).pack(
+    side="right", padx=(0, 10), pady=8)
+
+def _silent_check(status, info):
+    if status == "available":
+        update_notif_var.set(f"↑ {info} available")
+        ytdlp_ver_var.set(f"yt-dlp {get_ytdlp_version()}")
+
+check_ytdlp_update(_silent_check)
 
 separator(root, "x")
 
