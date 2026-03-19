@@ -33,17 +33,28 @@ git clone https://github.com/AlexisT94/AdvancedSongDownloader.git
 cd AdvancedSongDownloader
 ```
 
-**2. Install Python dependencies**
+**2. Install VLC**
+
+If you don't have Homebrew installed:
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+Then install VLC:
+```bash
+brew install vlc
+```
+
+**3. Install Python dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-**3. Make ffmpeg executable**
+**4. Make ffmpeg executable**
 ```bash
 chmod +x assets/ffmpeg
 ```
 
-**4. Run**
+**5. Run**
 ```bash
 python Main.py
 ```
